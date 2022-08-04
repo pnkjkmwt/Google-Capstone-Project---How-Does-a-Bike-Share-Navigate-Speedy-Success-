@@ -1,0 +1,733 @@
+---
+title: "Google Data Analytics Capstone Project: How does a bike-share navigate speedy success?"
+output: html_notebook
+---
+
+Load the necessary libraries
+
+```{r}
+library(tidyverse)
+library(skimr)
+library(lubridate)
+library(janitor)
+library(scales)
+library(mapview)
+library(ggplot2)
+library(dplyr)
+```
+
+Importing data to Rstudio
+
+```{r}
+```
+
+```{r}
+Jan <- read.csv("202101-divvy-tripdata.csv")
+Feb <- read.csv("202102-divvy-tripdata.csv")
+Mar <- read.csv("202103-divvy-tripdata.csv")
+Apr <- read.csv("202104-divvy-tripdata.csv")
+May <- read.csv("202105-divvy-tripdata.csv")
+Jun <- read.csv("202106-divvy-tripdata.csv")
+Jul <- read.csv("202107-divvy-tripdata.csv")
+Aug <- read.csv("202108-divvy-tripdata.csv")
+Sep <- read.csv("202109-divvy-tripdata.csv")
+Oct <- read.csv("202110-divvy-tripdata.csv")
+Nov <- read.csv("202111-divvy-tripdata.csv")
+Dec <- read.csv("202112-divvy-tripdata.csv")
+Jan22 <- read.csv("202201-divvy-tripdata.csv")
+Feb22 <- read.csv("202201-divvy-tripdata.csv")
+```
+
+Merging data into a data frame
+
+```{r}
+triprawdata <- rbind(Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec,Jan22,Feb22)
+```
+
+Using glimpse() function to understand the type of data types of data frame
+
+```{r}
+glimpse(triprawdata)
+```
+
+Data Cleaning
+
+```{r}
+triprawdata = triprawdata %>% 
+  remove_empty(which = c("cols", "rows")) %>% 
+  clean_names()
+```
+
+Transforming data types of variables to a suitable data type
+
+```{r}
+trips_1 = triprawdata %>% 
+  mutate(
+    start_lat = as.numeric(start_lat),
+    start_lng = as.numeric(start_lng),
+    end_lat = as.numeric(end_lat),
+    end_lng = as.numeric(end_lng)
+  )
+
+glimpse(trips_1)
+```
+
+Checking if there is NA values in the data frame
+
+```{r}
+colSums(is.na(trips_1))
+```
+
+After running this chunk of code: \* end_lat has 4943 missing values with a ratio of 0.0851%. \* end_lng has 4943 missing values with a ratio of 0.0851%.
+
+Format date-time columns
+
+```{r}
+trips_2 = trips_1 %>% 
+  mutate(
+    started_at = ymd_hms(as_datetime(started_at)),
+    ended_at = ymd_hms(as_datetime(ended_at))
+  )
+
+glimpse(trips_2)
+```
+
+Create additional columns based on the started_at date-time column To be able to analyze number of trips per hour,day, month from different stations and the type of user of these trips we must create a new variable from the existing ones.
+
+```{r}
+trips_3 = trips_2 %>% 
+  mutate(
+    hour_start = hour(started_at),
+    weekday = wday(started_at, label = T, abbr = F),
+    month = month(started_at, label = T, abbr =F),
+    day = day(started_at),
+    week = strftime(started_at, format = "%V"),
+    trip_time = difftime(ended_at, started_at, units = "mins")
+  )
+
+glimpse(trips_3)
+```
+
+Converting column types - bike and ride types(Our business task focuses on "How annual members and casual riders use Ciclystic bikes differently?" I make sure that the rideable_type and member_casual variables are consistent in my analysis.)
+
+```{r}
+trips_4 = trips_3 %>% 
+  mutate(
+    rideable_type = recode(as_factor(rideable_type),
+                           "classic_bike" = "classic",
+                           "electric_bike"= "electric",
+                           "docked_bike" = "docked"),
+    member_casual = as_factor(member_casual)
+  )
+```
+
+For simple visualization, let's rename columns
+
+```{r}
+trips_4 = trips_4 %>% 
+  rename(
+    bikes = rideable_type,
+    users = member_casual
+  )
+```
+
+Checking for missing values
+
+```{r}
+colSums(is.na(trips_4))
+```
+
+Create a new data frame based on filter credentials: trip_time could not be smaller than 1 min or longer than 24h =1440 min
+
+```{r}
+trips_5=trips_4 %>%
+  filter(between(trip_time,1,1440))
+```
+
+Structure, head summary of the trips_5 data frame
+
+```{r}
+str(trips_5)
+```
+
+```{r}
+head(trips_5, 10)
+```
+
+```{r}
+trips_5 %>%
+  skim_without_charts()
+```
+
+Create a new data frame with time variables for analysis
+
+```{r}
+trips_time_df = trips_5 %>% 
+  drop_na(
+    end_lat, end_lng
+  ) %>% 
+  select(
+    ride_id, users, bikes, hour_start, weekday, month, day, week, trip_time
+  )
+```
+
+```{r}
+colSums(is.na(trips_time_df))
+```
+
+Create a data frame with location variables for further analysis
+
+```{r}
+trips_location_df = trips_5 %>% 
+  select(
+    ride_id, start_station_name, end_station_name, start_lat, start_lng,
+    end_lat, end_lng, users, trip_time
+  ) %>% 
+  drop_na(
+    start_station_name, end_station_name, end_lat, end_lng
+  )
+```
+
+```{r}
+colSums(is.na(trips_location_df))
+```
+
+Data Visualisation Time Analysis Once the data was cleaned and separated in two data frames time dependent dataframe trips_time_df and location dependent dataframe trips_location_df we determined the following : \* Number of trips, mean of trip duration, total trip duration by ride type \* Number of trips, mean of trip duration, total trip duration by time \* Number of trips, mean of trip duration, total trip duration by location \* Number of trips, mean of trip duration, total trip duration by bike type Setting theme for our graphs
+
+```{r}
+newtheme <- theme_light() + 
+  theme(plot.title = element_text(color = "#002949", face = 'bold', size =12),
+        plot.subtitle = element_text(color = "#890000", size = 10),
+        plot.caption = element_text(color = '#890000', face = 'italic', size =8),
+        panel.border = element_rect(color = "#002949", size = 1),
+        legend.position = "right",
+        legend.text = element_text(colour="blue", size=10, face="bold"),
+        legend.title = element_text(colour="blue", size=10, face="bold"),
+        #legend.position='none',
+        axis.title.x = element_text(colour = "#890000"),
+        axis.title.y = element_text(colour = "#002949"),
+        axis.text.x = element_text(angle = 45, hjust = 1, color = '#890000'),
+        axis.text.y = element_text(angle = 45, hjust = 1, color = '#002949'),
+        axis.line = element_line(color = "#002949", size =1),
+  )
+
+
+theme_set(newtheme)
+```
+
+Day hours Analysis
+
+```{r}
+ride_hours=trips_time_df %>% 
+  group_by(
+    users, hour_start) %>%
+  summarise(nr_rides=n(),
+            average_trip=mean(trip_time),
+            total_trip=sum(trip_time)
+  )
+```
+
+Visualise number of trips by hours an Segmented by users type
+
+```{r}
+ride_hours %>% 
+  ggplot(aes(hour_start, nr_rides, fill = users))+ 
+  geom_col(position = "dodge")+ 
+  scale_y_continuous()+
+  labs(
+    title = "Number of Trips per Hour",
+    subtitle = "Number of trips for every hour and by users",
+    caption = "Figure 1",
+    x = "hour of the day",
+    y = "number of rides",
+  )+
+  theme()
+```
+
+Visualise average number of trips by hours
+
+```{r}
+ride_hours %>% 
+  ggplot(aes(hour_start, average_trip, fill = users))+ 
+  geom_col(position = "dodge")+ 
+  scale_y_continuous()+
+  labs(
+    title = "Average Number of Trips per Hour",
+    subtitle = "Number of trips for every hour segmented by users",
+    caption = "Figure 2",
+    x = "hour of the day",
+    y = "average trips duration",
+  )+
+  theme()
+```
+
+Visualise total_trip time by hours
+
+```{r}
+ride_hours %>% 
+  ggplot(aes(hour_start, total_trip, fill = users))+ 
+  geom_col(show.legend = TRUE, position = "dodge")+ 
+  scale_y_continuous()+
+  labs(
+    title = "Total trip Duration per Hour",
+    subtitle = "Total duration for every hour segmented by users",
+    caption = "Figure 3",
+    x = "hour of the day",
+    y = "total duration",
+  )+
+  theme()
+```
+
+Analysis of days of the week
+
+```{r}
+ride_week = trips_time_df %>% 
+  group_by(
+    users, weekday
+  ) %>% 
+  summarise(
+    nr_rides_week = n(),
+    avg_rides_week = mean(trip_time),
+    total_duration_week = sum(trip_time)
+  )
+```
+
+Visualise number of trips by weekday
+
+```{r}
+ride_week %>% 
+  ggplot(aes(weekday, nr_rides_week, fill = users))+
+    geom_col(position = "dodge")+
+    scale_y_continuous(labels = comma)+
+    labs(
+      title = "Trips Time by Week Days and Segmented by Users",
+      subtitle = "Number of trips for every week of the year",
+      caption = "Fig 4",
+      x = "day of the week",
+      y = "number of trips"
+    )+
+    theme()
+```
+
+Visualise average trips time by day of the week
+
+```{r}
+ride_week %>% 
+  ggplot(aes(weekday, avg_rides_week, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Average Trips Time by Week Days and Segmented by Users",
+    subtitle = "Average Number of trips for every week of the year",
+    caption = "Fig 5",
+    x = "day of the week",
+    y = " avg number of trips"
+  )+
+  theme()
+```
+
+Visualise total trips time by day of the week
+
+```{r}
+ride_week %>% 
+  ggplot(aes(weekday, total_duration_week, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Total Time Trips by Week Days and Segmented by Users",
+    subtitle = "Total Trips Time for every week of the year",
+    caption = "Fig 6",
+    x = "day of the week",
+    y = " total time trips"
+  )+
+  theme()
+```
+
+Analysis of trip time by month Discriptive analysis through aggregation
+
+```{r}
+ride_month = trips_time_df %>% 
+  group_by(
+    users, month
+  ) %>% 
+  summarise(
+    nr_rides_month = n(),
+    avg_rides_month = mean(trip_time),
+    total_time_month = sum(trip_time)
+  )
+```
+
+Visualise number trips by month
+
+```{r}
+ride_month %>% 
+  ggplot(aes(month, nr_rides_month, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Number of Trips by Month and Segmented by Users",
+    subtitle = "Number Trips Time for every Month",
+    caption = "Fig 7",
+    x = "month",
+    y = " number of trips"
+  )+
+  theme()
+```
+
+Visualise Average trips time by month
+
+```{r}
+ride_month %>% 
+  ggplot(aes(month, avg_rides_month, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Average Trips Time by Month and Segmented by Users",
+    subtitle = "Average Trips Time for every Month",
+    caption = "Fig 8",
+    x = "month",
+    y = "average trips time"
+  )+
+  theme()
+```
+
+Visualise total trips time by month
+
+```{r}
+ride_month %>% 
+  ggplot(aes(month, total_time_month, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Total Trips Time by Month and Segmented by Users",
+    subtitle = "Total Trips Time for every Month",
+    caption = "Fig 8",
+    x = "month",
+    y = "total trips time"
+  )+
+  theme()
+```
+
+Conclusions: Casual Riders From June to August, Casual riders had more rides than membership riders, with Annual riders having more rides from January to May and September to December.
+
+Average duration The average duration for yearly riders appears to be pretty consistent throughout the year, whereas the average time for casual rides is longer than for membership riders.
+
+Total duration Casual riders' total duration is higher from March to October, while membership riders' total length is higher from January to February and November to December.
+
+Visualisation and Analysis of trips duration by days of the year
+
+```{r}
+ride_day = trips_time_df %>% 
+  group_by(
+    users, day
+  ) %>% 
+  summarise(
+    nr_trips_day = n(),
+    avg_duration_day = mean(trip_time),
+    total_duration_day = sum(trip_time)
+  )
+```
+
+Visualisation of number of trips by day and segmented by users
+
+```{r}
+ride_day %>% 
+  ggplot(aes(day, nr_trips_day, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Number of Trips per day and Segmented by Users",
+    subtitle = "Number of trips per day",
+    caption = "Fig 9",
+    x = "number of trips",
+    y = "day"
+  )+
+  theme()
+```
+
+Visualisation of average trip length by day and segmented by users
+
+```{r}
+ride_day %>% 
+  ggplot(aes(day, avg_duration_day, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Average Trip Time per day and Segmented by Users",
+    subtitle = "Length of trips per day",
+    caption = "Fig 10",
+    x = "avg trip duration",
+    y = "day"
+  )+
+  theme()
+```
+
+Visualisation of total trip length by day and segmented by users
+
+```{r}
+ride_day %>% 
+  ggplot(aes(day, total_duration_day, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Total Trip Duration per day and Segmented by Users",
+    subtitle = "Total trip duration per day",
+    caption = "Fig 11",
+    x = "total trip duration",
+    y = "day"
+  )+
+  theme()
+```
+
+Visualization of trips duration for weeks of the year and segmented by users
+
+```{r}
+trip_week = trips_time_df %>% 
+  group_by(
+    users, week
+  ) %>% 
+  summarise(
+    nr_trips_week = n(),
+    avg_tdw = mean(trip_time),
+    total_tdw = sum(trip_time)
+  )
+```
+
+Visualisation of number of trips per week of year
+
+```{r}
+trip_week %>% 
+  ggplot(aes(week, nr_trips_week, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Number of trips per week and Segmented by Users",
+    subtitle = "Number of Trips per week",
+    caption = "Fig 12",
+    x = "number of trips",
+    y = "week"
+  )+
+  theme()
+
+```
+
+Visualisation of average trip duration per week of year
+
+```{r}
+trip_week %>% 
+  ggplot(aes(week, avg_tdw, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Average of trip duration per week and Segmented by Users",
+    subtitle = "Average of trips duration per week",
+    caption = "Fig 13",
+    x = "average trip duration - Paul Juverdeanu",
+    y = "week"
+  )+
+  theme()
+```
+
+Visualisation of total trips duration per week of the year
+
+```{r}
+trip_week %>% 
+  ggplot(aes(week, total_tdw, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Total trip duration per week and Segmented by Users",
+    subtitle = "Total of trips duration per week",
+    caption = "Fig 14",
+    x = "total trip duration - Paul Juverdeanu",
+    y = "week"
+  )+
+  theme()
+```
+
+Analysis based on type of bikes
+
+Data Aggregation by users and type of bikes Visualise number of rides by bike type
+
+```{r}
+ride_bikes = trips_time_df %>% 
+  group_by(
+    users, bikes
+  ) %>% 
+  summarise(
+    nr_bike_ride = n(),
+    avg_bike_ride = mean(trip_time),
+    total_bike_ride = sum(trip_time)
+  )
+```
+
+```{r}
+ride_bikes %>% 
+  ggplot(aes(bikes,nr_bike_ride, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Number of Trips per Bike Type and Segregated by Users",
+    subtitle = "Number of trips per bike type",
+    caption = "Fig 15",
+    x = "bike type",
+    y = "number of trips"
+  )+
+  theme()
+```
+
+Visualise the average trip time by bike type
+
+```{r}
+ride_bikes %>% 
+  ggplot(aes(bikes, avg_bike_ride, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Average trip time per Bike Type and Segregated by Users",
+    subtitle = "Average trip time per bike type",
+    caption = "Fig 16",
+    x = "bike type",
+    y = "average trip time"
+  )+
+  theme()
+```
+
+Visualise the total trip time by bike type
+
+```{r}
+ride_bikes %>% 
+  ggplot(aes(bikes, total_bike_ride, fill = users))+
+  geom_col(position = "dodge")+
+  scale_y_continuous(labels = comma)+
+  labs(
+    title = "Total trip time per Bike Type and Segregated by Users",
+    subtitle = "Total trip time per bike type",
+    caption = "Fig 17 ",
+    x = "bike type",
+    y = "total trip time"
+  )+
+  theme()
+```
+
+Cyclistic bike analysis by location Most popular start stations Data used in this analysis is derived from:
+
+```{r}
+head(trips_location_df, 10)
+```
+
+```{r}
+colnames(trips_location_df)
+```
+
+Our data frame tips_location_df is sliced and grouped as follows
+
+```{r}
+pop_start_station = trips_location_df %>% 
+  group_by(
+    users, start_station_name, start_lat, start_lng
+  ) %>% 
+  summarise(
+    nr_rides_start = n()
+  ) %>% 
+  arrange(-nr_rides_start)
+```
+
+Let's get a visual of the popular start station dataframe
+
+```{r}
+head(pop_start_station)
+```
+
+Checking for null values
+
+```{r}
+colSums(is.na(pop_start_station))
+```
+
+Mapview of the most popular 30 start stations
+
+```{r}
+pop_start_station[1:30, ] %>%
+  mapview(
+    xcol = "start_lng", 
+        ycol = "start_lat",
+        cex = "nr_rides_start",
+        alpha = 0.9, 
+        crs = 4269,
+        color = "#8b0000",
+        grid = F, 
+        legend = T,
+        layer.name = "30 Most Popular Start Stations"
+  )
+```
+
+Mapview of the 30 most popular ending stations
+
+```{r}
+pop_end_station = trips_location_df %>% 
+  group_by(
+    users, end_station_name, end_lat, end_lng
+  ) %>% 
+  summarise(
+    nr_rides_end = n()
+  ) %>% 
+  arrange(-nr_rides_end)
+
+```
+
+```{r}
+pop_end_station[1:30,] %>% 
+  mapview(
+    xcol = "end_lng",
+    ycol = "end_lat",
+    cex = "nr_rides_end", # size of circle based on value size
+    alpha = 0.9,
+    crs = 4269,
+    color = "#8b0000",
+    grid = F,
+    legend = T,
+    layer.name = "30 Most Popular End Stations"
+  )
+```
+
+Visualise the most popular 10 start stations
+
+```{r}
+pop_start_station[1:10, ] %>% 
+  ggplot(aes(start_station_name, nr_rides_start, fill = users))+
+  geom_col(position = "dodge")+
+  coord_flip()+
+  labs(
+    title = "Most Popular Start Stations",
+    subtitle = "Top 10 most popular start stations",
+    caption = "Fig 18 ",
+    x = "station name",
+    y = "number of trips"
+  )+
+  theme()
+
+```
+
+Most popular end stations Segmented by Users
+
+```{r}
+pop_end_station[1:10,] %>% 
+  ggplot(aes(end_station_name, nr_rides_end, fill = users))+
+  geom_col(position = "dodge")+
+  coord_flip()+
+  labs(
+    title = "Most Popular End Stations Segmented by Users",
+    subtitle = "Top 10 most popular end stations",
+    caption = "Fig 19",
+    x = "station name",
+    y = "number of trips"
+  )+
+  theme()
+```
+
+Counclusions: The stations that are popular for starting and ending rides differ between members and casual cyclists. Top starting and destination stations for casual cluster around tourist locations within about 1km of the lakefront. Top stations for members riders are more dispersed and reflect office loactions.
+
+Top recommendations: 1. The casual riders' favourite start and end stations should be the focus of the marketing campaign.
+
+2, Marketing campaign should be focused for the busiest casual rider days (Friday, Saturday, and Sunday), busiest hours (afternoon), and most popular months to reach the most riders (June, July and August).
